@@ -80,7 +80,7 @@ Deployment, upgrade, backup/restore, and security details live in `docs/`.
 8dc73fc3b00203e72d176e85b50938627c7b086e607c682e8d3c22c02bb99fe8
 ```
 
-Production dependency licenses are generated from the frozen lockfile in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). CI blocks unknown or unreviewed production licenses.
+Production dependency licenses are generated from the frozen install in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Platform-specific prebuilt binaries are excluded from the table so CI is deterministic across host architectures; their upstream license metadata remains in the frozen lockfile. CI blocks unknown or unreviewed production licenses.
 
 ## Responsible use and disclaimer
 

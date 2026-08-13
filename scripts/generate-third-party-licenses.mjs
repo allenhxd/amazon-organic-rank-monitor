@@ -14,7 +14,17 @@ const allowed = new Set([
 ]);
 const outputPath = path.resolve("THIRD_PARTY_LICENSES.md");
 const data = JSON.parse(execFileSync("pnpm", ["licenses", "list", "--prod", "--json"], { encoding: "utf8" }));
-const licenses = Object.keys(data).sort();
+const platformSpecific = (name) => name === "fsevents"
+  || name.startsWith("@img/sharp-")
+  || name.startsWith("@img/sharp-libvips-")
+  || name.startsWith("@msgpackr-extract/")
+  || name.startsWith("@next/swc-");
+const inventory = Object.fromEntries(Object.entries(data).map(([license, entries]) => [
+  license,
+  entries.flatMap((entry) => entry.versions.map((version) => ({ name: entry.name, version })))
+    .filter((entry) => !platformSpecific(entry.name)),
+]).filter(([, entries]) => entries.length));
+const licenses = Object.keys(inventory).sort();
 const blocked = licenses.filter((license) => !allowed.has(license));
 if (blocked.length) {
   console.error(`Blocked or unknown production licenses: ${blocked.join(", ")}`);
@@ -32,8 +42,8 @@ const lines = [
   "| --- | --- |",
 ];
 for (const license of licenses) {
-  const packages = data[license]
-    .flatMap((entry) => entry.versions.map((version) => `${entry.name}@${version}`))
+  const packages = inventory[license]
+    .map((entry) => `${entry.name}@${entry.version}`)
     .sort((left, right) => left.localeCompare(right, "en"));
   lines.push(`| ${license} | ${packages.join("<br>")} |`);
 }
@@ -42,7 +52,7 @@ lines.push(
   "## Review notes",
   "",
   "- `xlsx@0.20.3` is the Apache-2.0 SheetJS Community Edition package vendored from the official SheetJS CDN archive.",
-  "- Platform-specific native packages may appear in the lockfile even when they are not shipped in a particular Linux image.",
+  "- Platform-specific prebuilt native packages are excluded so the inventory is deterministic across supported host architectures.",
   "- CI fails if a production dependency introduces a license outside the reviewed allowlist above.",
 );
 const rendered = `${lines.join("\n")}\n`;
