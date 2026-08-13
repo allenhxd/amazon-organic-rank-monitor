@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY vendor ./vendor
+RUN pnpm install --frozen-lockfile
+COPY worker ./worker
+COPY src/domain ./src/domain
+COPY tsconfig.json ./
+CMD ["pnpm", "worker"]

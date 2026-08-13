@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.production.example
+.next
+node_modules
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
+outputs
+work
+qa
+server-backups
+output

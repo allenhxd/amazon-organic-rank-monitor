@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a scoped improvement
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What evidence-backed workflow is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries
+      options:
+        - label: This does not add proxy rotation, CAPTCHA bypass, ad clicking, or risk-control evasion.
+          required: true
+        - label: This preserves Sponsored exclusion-only behavior and evidence-based result states.
+          required: true
