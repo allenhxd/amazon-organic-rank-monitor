@@ -4,6 +4,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-13
+
 ### Added
 
 - Open-source governance, self-hosting documentation, CI, CodeQL, dependency audit, secret scanning, and license policy.
@@ -20,7 +22,3 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 - CAPTCHA stops the run and all remaining collection work immediately without retry; only ordinary network or initialization failures may use one new isolated-context retry.
 - Corrupt, encrypted, macro-enabled, path-traversing, oversized, and decompression-bomb-like workbooks are rejected.
-
-## [0.1.0] - Unreleased
-
-Initial public release candidate.
