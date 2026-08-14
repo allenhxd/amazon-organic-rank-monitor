@@ -1,3 +1,5 @@
+import type { Currency, Marketplace } from "@/domain/marketplaces";
+
 export type ProductType = "自有" | "竞品";
 export type ResultState = "已完成" | "暂无" | "未完成";
 export type RunStatus = "等待中" | "执行中" | "部分完成" | "已完成" | "未完成" | "已取消";
@@ -33,7 +35,7 @@ export type Project = {
   id: string;
   ownerId: string;
   name: string;
-  marketplace: "Amazon.com（美国站）";
+  marketplace: Marketplace;
   zipCode: string;
   scanDepth: 1 | 2 | 3;
   viewport: "1920×1080 / 100% / DPR 1";
@@ -55,18 +57,20 @@ export type RunProgress = {
 
 export type RunReceipt = {
   protocolVersion: string;
-  marketplace: "amazon.com";
+  marketplace: Marketplace;
   zipCode: string;
   viewport: "1920×1080";
   zoom: "100%";
   dpr: 1;
-  locale: "en-US";
+  locale: "en-US" | "en-CA" | "es-MX";
+  timezone: string;
+  currency: Currency;
   signedIn: false;
   isolatedSession: true;
   scanDepth: 1 | 2 | 3;
   rankingPolicy: "广告排除后的自然行";
   rateVersion: string;
-  meteringMode: "disabled" | "wallet";
+  meteringMode: "disabled" | "wallet" | "trial";
   workerVersion: string;
   adRankFieldsStored: false;
 };
@@ -87,7 +91,8 @@ export type RankResult = {
   naturalColumn: number | null;
   naturalOrdinal: number | null;
   matchType: "直接命中" | "同父体命中" | null;
-  priceUsd: number | null;
+  priceAmount: number | null;
+  currency: Currency;
   coupon: string | null;
   monthlySales: string | null;
   stock: string | null;
@@ -134,6 +139,19 @@ export type WalletLedger = {
   referenceId: string | null;
   reason: string;
   actor: string;
+  createdAt: string;
+};
+
+export type QuotaLot = {
+  id: string;
+  userId: string;
+  kind: "试用" | "套餐" | "购买" | "管理员";
+  granted: number;
+  available: number;
+  frozen: number;
+  consumed: number;
+  expiresAt: string | null;
+  sourceRef: string;
   createdAt: string;
 };
 
@@ -188,6 +206,7 @@ export type AppSnapshot = {
   currentUser: UserAccount;
   projects: Project[];
   wallet: Wallet;
+  quotaLots: QuotaLot[];
   ledger: WalletLedger[];
   runs: MonitorRun[];
   rateConfig: RateConfig;

@@ -33,4 +33,11 @@ describe("任务结算", () => {
     expect(settleMetering(20, { searchPages: 4, detailPages: 2, ratingSubjects: 1 }, rate, "wallet"))
       .toEqual({ consumedPoints: 11, refundedPoints: 9 });
   });
+
+  it("trial 模式保留内部标识但不冻结或扣除额度", () => {
+    expect(resolveMeteringMode("trial")).toBe("trial");
+    expect(billableEstimate(20, "trial")).toBe(0);
+    expect(settleMetering(0, { searchPages: 1, detailPages: 1, ratingSubjects: 1 }, rate, "trial"))
+      .toEqual({ consumedPoints: 0, refundedPoints: 0 });
+  });
 });

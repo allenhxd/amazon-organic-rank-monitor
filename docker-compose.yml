@@ -54,6 +54,8 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile.web
+      args:
+        NEXT_PUBLIC_ENABLED_MARKETPLACES: ${ENABLED_MARKETPLACES:-amazon.com}
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
@@ -63,6 +65,7 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?请在服务器环境文件设置 AUTH_SECRET}
       APP_ORIGIN: ${APP_ORIGIN:?请设置完整站点 URL，例如 https://rank.example.com}
       APP_DOMAIN: ${APP_DOMAIN:?请设置站点域名，例如 rank.example.com}
+      NEXT_PUBLIC_ENABLED_MARKETPLACES: ${ENABLED_MARKETPLACES:-amazon.com}
       METERING_MODE: ${METERING_MODE:-disabled}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:?请设置初始管理员邮箱}
       INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-管理员}
@@ -100,7 +103,7 @@ services:
       DATABASE_URL: postgresql://rank_monitor:${POSTGRES_PASSWORD}@postgres:5432/rank_monitor
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: 1
-      WORKER_VERSION: worker-0.2.0
+      WORKER_VERSION: worker-0.1.1
     volumes: ["worker_evidence:/app/evidence"]
     depends_on:
       migrate: { condition: service_completed_successfully }

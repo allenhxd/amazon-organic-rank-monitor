@@ -1,15 +1,11 @@
 import { z } from "zod";
+import { isValidPostalCode, marketplaceSchema, normalizePostalCode } from "@/domain/marketplaces";
 
 export const asinSchema = z
   .string()
   .trim()
   .toUpperCase()
   .regex(/^[A-Z0-9]{10}$/, "ASIN 必须是 10 位字母或数字");
-
-export const zipCodeSchema = z
-  .string()
-  .trim()
-  .regex(/^\d{5}$/, "请输入 5 位美国邮编");
 
 export const monitorItemInputSchema = z.object({
   category: z.string().trim().min(1, "类目不能为空").transform((value) => value === "仿粘帽" ? "仿毡帽" : value),
@@ -24,13 +20,18 @@ export const monitorItemInputSchema = z.object({
 
 export const projectConfigSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  zipCode: zipCodeSchema,
+  marketplace: marketplaceSchema,
+  zipCode: z.string().trim(),
   scanDepth: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-});
+}).superRefine((value, context) => {
+  if (value.zipCode && !isValidPostalCode(value.marketplace, value.zipCode)) {
+    context.addIssue({ code: "custom", path: ["zipCode"], message: "请输入所选站点的有效邮编" });
+  }
+}).transform((value) => ({ ...value, zipCode: normalizePostalCode(value.marketplace, value.zipCode) }));
 
 export const walletAdjustmentSchema = z.object({
   userId: z.string().min(1),
-  amount: z.number().int().refine((value) => value !== 0, "调整点数不能为 0"),
+  amount: z.number().int().refine((value) => value !== 0, "调整额度不能为 0"),
   reason: z.string().trim().min(2).max(200),
 });
 

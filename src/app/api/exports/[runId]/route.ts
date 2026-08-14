@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { assertUser } from "@/server/auth";
 import { getProject, getRun } from "@/server/store";
+import { MARKETPLACES } from "@/domain/marketplaces";
 
 type Context = { params: Promise<{ runId: string }> };
 
@@ -23,7 +24,7 @@ export async function GET(_request: Request, context: Context) {
     ["创建时间", run.requestedAt],
     ["开始时间", run.startedAt || ""],
     ["完成时间", run.completedAt || ""],
-    ["站点", "Amazon.com（美国站）"],
+    ["站点", MARKETPLACES[run.receipt.marketplace].label],
     ["邮编", run.receipt.zipCode],
     ["扫描深度", `${run.receipt.scanDepth} 页`],
     ["排名口径", run.receipt.rankingPolicy],
@@ -33,9 +34,9 @@ export async function GET(_request: Request, context: Context) {
     ["Worker版本", run.receipt.workerVersion],
     ["计量模式", run.receipt.meteringMode],
     ["费率版本", run.receipt.rateVersion],
-    ["预计点数", run.estimatedPoints],
+    ["预计监控额度", run.estimatedPoints],
     ["实际消耗", run.consumedPoints],
-    ["退回点数", run.refundedPoints],
+    ["退回额度", run.refundedPoints],
   ];
   const resultRows = run.results.map((result) => ({
     类目: result.category,
@@ -49,7 +50,8 @@ export async function GET(_request: Request, context: Context) {
     自然商品序号: result.naturalOrdinal ?? "",
     实际展示ASIN: result.displayedAsin ?? "",
     命中类型: result.matchType ?? "",
-    售价USD: result.priceUsd ?? "",
+    售价: result.priceAmount ?? "",
+    币种: result.currency,
     Coupon: result.coupon ?? "",
     月销标识: result.monthlySales ?? "",
     库存: result.stock ?? "",

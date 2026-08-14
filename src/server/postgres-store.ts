@@ -12,6 +12,7 @@ import type {
   MonitorItem,
   MonitorRun,
   Project,
+  QuotaLot,
   RankResult,
   RateConfig,
   UserAccount,
@@ -20,6 +21,7 @@ import type {
 } from "@/domain/types";
 import { estimatePoints } from "@/domain/pricing";
 import { billableEstimate, isMeteringEnabled, resolveMeteringMode } from "@/domain/metering";
+import { enabledMarketplaces, MARKETPLACES, type Marketplace } from "@/domain/marketplaces";
 import { databasePool, transaction } from "@/server/database";
 import type { MonitorWorkerJob } from "../../worker/types";
 
@@ -94,8 +96,8 @@ function projectFromRow(row: QueryResultRow, items: MonitorItem[]): Project {
     id: row.id,
     ownerId: row.owner_id,
     name: row.name,
-    marketplace: "Amazon.com（美国站）",
-    zipCode: row.zip_code.trim(),
+    marketplace: row.marketplace as Marketplace,
+    zipCode: row.zip_code?.trim() || "",
     scanDepth: number(row.scan_depth) as 1 | 2 | 3,
     viewport: "1920×1080 / 100% / DPR 1",
     rankingPolicy: "广告排除后的自然行",
@@ -124,7 +126,8 @@ function resultFromRow(row: QueryResultRow, displayRunId: string): RankResult {
     naturalColumn: row.natural_column,
     naturalOrdinal: row.natural_ordinal,
     matchType: row.match_type === "DIRECT" ? "直接命中" : row.match_type === "SAME_PARENT" ? "同父体命中" : null,
-    priceUsd: row.price_usd === null ? null : number(row.price_usd),
+    priceAmount: row.price_amount === null && row.price_usd === null ? null : number(row.price_amount ?? row.price_usd),
+    currency: (row.price_currency?.trim() || "USD") as RankResult["currency"],
     coupon: row.coupon,
     monthlySales: row.monthly_sales_text,
     stock: row.stock_text,
@@ -185,11 +188,20 @@ async function ensureInitialAdmin() {
     `, [email, name]);
     const userId = inserted.rows[0].id;
     await client.query(`INSERT INTO wallets(user_id, available_points) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING`, [userId, points]);
+    const currentWallet = await client.query(`SELECT available_points FROM wallets WHERE user_id = $1`, [userId]);
+    const lotCount = await client.query(`SELECT count(*)::int count FROM quota_lots WHERE user_id = $1`, [userId]);
+    if (number(lotCount.rows[0]?.count) === 0 && number(currentWallet.rows[0]?.available_points) > 0) {
+      const amount = number(currentWallet.rows[0].available_points);
+      await client.query(`
+        INSERT INTO quota_lots(user_id, kind, granted_amount, available_amount, source_ref)
+        VALUES ($1, 'ADMIN', $2, $2, $3) ON CONFLICT (source_ref) DO NOTHING
+      `, [userId, amount, `initial-admin:${userId}`]);
+    }
     const project = await client.query(`SELECT id FROM projects WHERE owner_id = $1 LIMIT 1`, [userId]);
     if (!project.rowCount) {
       await client.query(`
-        INSERT INTO projects(owner_id, name, zip_code, scan_depth, dimensions)
-        VALUES ($1, '我的自然排名监控', '96038', 1, $2::jsonb)
+        INSERT INTO projects(owner_id, name, marketplace, zip_code, scan_depth, dimensions)
+        VALUES ($1, '我的自然排名监控', 'amazon.com', null, 1, $2::jsonb)
       `, [userId, JSON.stringify(defaultDimensions)]);
     }
     const costs = await client.query(`SELECT 1 FROM cost_center_entries LIMIT 1`);
@@ -216,6 +228,26 @@ export async function getAccountById(userId: string) {
   await ensureInitialAdmin();
   const result = await databasePool().query(`SELECT * FROM users WHERE id = $1`, [userId]);
   return result.rows[0] ? userFromRow(result.rows[0]) : null;
+}
+
+export async function registerTrialAccount(emailValue: string) {
+  const email = emailValue.trim().toLocaleLowerCase("en-US");
+  return transaction(async (client) => {
+    const existing = await client.query(`SELECT * FROM users WHERE lower(email) = $1 FOR UPDATE`, [email]);
+    if (existing.rows[0]) return userFromRow(existing.rows[0]);
+    const created = await client.query(`
+      INSERT INTO users(email, display_name, role, membership_status, trial_approved, trial_used)
+      VALUES ($1, $2, 'USER', 'TRIAL', true, false) RETURNING *
+    `, [email, email.split("@")[0].slice(0, 40) || "新用户"]);
+    const userId = created.rows[0].id;
+    await client.query(`INSERT INTO wallets(user_id, available_points) VALUES ($1, 0)`, [userId]);
+    await client.query(`
+      INSERT INTO projects(owner_id, name, marketplace, zip_code, scan_depth, dimensions)
+      VALUES ($1, '我的自然排名监控', 'amazon.com', null, 1, $2::jsonb)
+    `, [userId, JSON.stringify(defaultDimensions)]);
+    await client.query(`INSERT INTO audit_logs(actor_id, action, resource_type, resource_id, details) VALUES ($1::uuid, 'TRIAL_ACCOUNT_CREATED', 'USER', $1::uuid::text, $2::jsonb)`, [userId, JSON.stringify({ email })]);
+    return userFromRow(created.rows[0]);
+  });
 }
 
 export async function hasAdminCredential() {
@@ -274,7 +306,7 @@ function anonymousSnapshot(): AppSnapshot {
     currentUser: { id: "anonymous", email: "", name: "访客", role: "USER", membershipStatus: "已到期", membershipExpiresAt: null, trialApproved: false, trialUsed: false },
     projects: [],
     wallet: { userId: "anonymous", available: 0, frozen: 0, consumed: 0, refunded: 0 },
-    ledger: [], runs: [],
+    ledger: [], quotaLots: [], runs: [],
     rateConfig: { version: "rate-v1", searchPage: 1, detailPage: 1, ratingSubject: 1, effectiveAt: new Date(0).toISOString() },
     users: [], costCenter: [], providerCapabilities, credentials,
   };
@@ -284,12 +316,13 @@ export async function getSnapshot(actor: StoreActor | null): Promise<AppSnapshot
   await ensureInitialAdmin();
   if (!actor) return anonymousSnapshot();
   void dispatchPendingRuns().catch(() => null);
-  const [account, projects, runs, walletResult, ledgerResult, rateResult, usersResult, costResult] = await Promise.all([
+  const [account, projects, runs, walletResult, ledgerResult, lotResult, rateResult, usersResult, costResult] = await Promise.all([
     getAccountById(actor.userId),
     loadProjects(actor),
     loadRuns(actor),
     databasePool().query(`SELECT * FROM wallets WHERE user_id = $1`, [actor.userId]),
     databasePool().query(`SELECT wl.*, coalesce(u.display_name, '系统') actor_name FROM wallet_ledger wl LEFT JOIN users u ON u.id = wl.actor_id WHERE wl.user_id = $1 ORDER BY wl.created_at DESC LIMIT 200`, [actor.userId]),
+    actor.role === "ADMIN" ? databasePool().query(`SELECT * FROM quota_lots ORDER BY created_at DESC`) : databasePool().query(`SELECT * FROM quota_lots WHERE user_id = $1 ORDER BY created_at DESC`, [actor.userId]),
     databasePool().query(`SELECT * FROM rate_configs WHERE effective_at <= now() ORDER BY effective_at DESC LIMIT 1`),
     actor.role === "ADMIN" ? databasePool().query(`SELECT * FROM users ORDER BY created_at`) : databasePool().query(`SELECT * FROM users WHERE id = $1`, [actor.userId]),
     actor.role === "ADMIN" ? databasePool().query(`SELECT * FROM cost_center_entries ORDER BY period DESC, created_at DESC`) : Promise.resolve({ rows: [] }),
@@ -303,11 +336,13 @@ export async function getSnapshot(actor: StoreActor | null): Promise<AppSnapshot
     amount: number(row.amount), balanceAfter: number(row.balance_after), referenceId: row.reference_id,
     reason: row.reason, actor: row.actor_name, createdAt: iso(row.created_at),
   }));
+  const lotKind = (value: string): QuotaLot["kind"] => ({ TRIAL: "试用", PACKAGE: "套餐", PURCHASE: "购买", ADMIN: "管理员" } as const)[value as "TRIAL"];
+  const quotaLots: QuotaLot[] = lotResult.rows.map((row) => ({ id: row.id, userId: row.user_id, kind: lotKind(row.kind), granted: number(row.granted_amount), available: number(row.available_amount), frozen: number(row.frozen_amount), consumed: number(row.consumed_amount), expiresAt: row.expires_at ? iso(row.expires_at) : null, sourceRef: row.source_ref, createdAt: iso(row.created_at) }));
   const category = (value: string): CostCenterItem["category"] => ({ HOSTING: "云服务器", STORAGE: "对象存储", EMAIL: "邮件", PLATFORM_AI: "平台AI" } as const)[value as "HOSTING"];
   const providerStatus = (value: string): CostCenterItem["providerStatus"] => value === "正常" || value === "不可用" ? value : "待配置";
   return {
     meteringEnabled: isMeteringEnabled(),
-    currentUser: account, projects, wallet, ledger, runs,
+    currentUser: account, projects, wallet, ledger, quotaLots, runs,
     rateConfig: rateFromRow(rateResult.rows[0]), users: usersResult.rows.map(userFromRow),
     costCenter: costResult.rows.map((row: QueryResultRow) => ({ id: row.id, category: category(row.category), period: row.period.trim(), amountCny: row.amount_cny === null ? null : number(row.amount_cny), usage: row.usage_text, providerStatus: providerStatus(row.provider_status), source: row.source_text })),
     providerCapabilities, credentials,
@@ -323,9 +358,9 @@ export async function getProject(actor: StoreActor, id: string) {
 
 export async function saveProject(actor: StoreActor, project: Project) {
   const result = await databasePool().query(`
-    UPDATE projects SET name = $1, zip_code = $2, scan_depth = $3, dimensions = $4::jsonb, updated_at = now()
-    WHERE id = $5 AND owner_id = $6 RETURNING *
-  `, [project.name, project.zipCode, project.scanDepth, JSON.stringify(project.dimensions), project.id, actor.userId]);
+    UPDATE projects SET name = $1, marketplace = $2, zip_code = $3, scan_depth = $4, dimensions = $5::jsonb, updated_at = now()
+    WHERE id = $6 AND owner_id = $7 RETURNING *
+  `, [project.name, project.marketplace, project.zipCode, project.scanDepth, JSON.stringify(project.dimensions), project.id, actor.userId]);
   if (!result.rows[0]) throw new Error("项目不存在或无权访问");
   return projectFromRow(result.rows[0], project.items);
 }
@@ -400,29 +435,59 @@ export async function startRun(actor: StoreActor, projectId: string) {
     const rateResult = await client.query(`SELECT * FROM rate_configs WHERE effective_at <= now() ORDER BY effective_at DESC LIMIT 1`);
     const rate = rateFromRow(rateResult.rows[0]);
     const project = projectFromRow(projectRow, items);
+    if (!enabledMarketplaces().includes(project.marketplace)) throw new Error("所选站点尚未完成真实回归，当前实例未开放");
+    if (!project.zipCode) throw new Error("请先选择或输入所选站点的邮编");
+    const accountResult = await client.query(`SELECT * FROM users WHERE id = $1 FOR UPDATE`, [actor.userId]);
+    const account = accountResult.rows[0];
+    if (!account) throw new Error("账户不存在或已停用");
+    const trialMode = account.membership_status === "TRIAL";
+    if (trialMode) {
+      if (!account.trial_approved || account.trial_used) throw new Error("试用任务已经使用，请购买 30 天工具使用权");
+      const uniqueKeywords = new Set(items.map((item) => normalizeKeyword(item.keyword))).size;
+      if (items.length > 5 || uniqueKeywords > 5) throw new Error("试用任务最多 5 个 ASIN＋关键词组合和 5 个唯一关键词");
+      if (project.scanDepth !== 1) throw new Error("试用任务固定扫描 1 页");
+    } else if (account.membership_status !== "ACTIVE" || (account.membership_expires_at && new Date(account.membership_expires_at) <= new Date())) {
+      throw new Error("工具使用权已到期，请续费后再创建任务");
+    }
     const estimate = estimatePoints(items, project.scanDepth, project.dimensions, rate);
-    const meteringMode = resolveMeteringMode(process.env.METERING_MODE);
+    const meteringMode = trialMode ? "trial" as const : resolveMeteringMode(process.env.METERING_MODE);
     const frozenPoints = billableEstimate(estimate.total, meteringMode);
     const walletResult = meteringMode === "wallet"
       ? await client.query(`SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE`, [actor.userId])
       : null;
     const wallet = walletResult?.rows[0];
-    if (meteringMode === "wallet" && (!wallet || number(wallet.available_points) < frozenPoints)) throw new Error("可用点数不足，请联系管理员调整配额");
+    if (meteringMode === "wallet" && (!wallet || number(wallet.available_points) < frozenPoints)) throw new Error("可用监控额度不足，请联系管理员调整配额");
     const databaseRunId = randomUUID();
     const displayId = `RUN-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${databaseRunId.slice(0, 6).toUpperCase()}`;
-    const receipt = { protocolVersion: "organic-rank-v3-web", marketplace: "amazon.com", zipCode: project.zipCode, viewport: "1920×1080", zoom: "100%", dpr: 1, locale: "en-US", signedIn: false, isolatedSession: true, scanDepth: project.scanDepth, rankingPolicy: "广告排除后的自然行", rateVersion: rate.version, meteringMode, workerVersion: process.env.WORKER_VERSION || "worker-0.2.0", adRankFieldsStored: false } as const;
+    const marketplace = MARKETPLACES[project.marketplace];
+    const receipt = { protocolVersion: "organic-rank-v4-web", marketplace: project.marketplace, zipCode: project.zipCode, viewport: "1920×1080", zoom: "100%", dpr: 1, locale: marketplace.locale, timezone: marketplace.timezone, currency: marketplace.currency, signedIn: false, isolatedSession: true, scanDepth: project.scanDepth, rankingPolicy: "广告排除后的自然行", rateVersion: rate.version, meteringMode, workerVersion: process.env.WORKER_VERSION || "worker-0.1.1", adRankFieldsStored: false } as const;
     const progress = { searchCompleted: 0, searchTotal: estimate.searchPages, detailCompleted: 0, detailTotal: estimate.detailPages, ratingCompleted: 0, ratingTotal: estimate.ratingSubjects };
     await client.query(`
       INSERT INTO monitor_runs(id, display_id, user_id, project_id, status, progress, estimated_points, frozen_points, receipt, effective_date)
       VALUES ($1, $2, $3, $4, 'QUEUED', $5::jsonb, $6, $7, $8::jsonb, (now() AT TIME ZONE 'Asia/Shanghai')::date)
     `, [databaseRunId, displayId, actor.userId, projectId, JSON.stringify(progress), estimate.total, frozenPoints, JSON.stringify(receipt)]);
+    if (trialMode) await client.query(`UPDATE users SET trial_used = true, updated_at = now() WHERE id = $1`, [actor.userId]);
     if (meteringMode === "wallet") {
       if (!wallet) throw new Error("用户钱包不存在");
       const balanceAfter = number(wallet.available_points) - frozenPoints;
+      let remaining = frozenPoints;
+      const lots = await client.query(`
+        SELECT * FROM quota_lots
+        WHERE user_id = $1 AND available_amount > 0 AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY expires_at ASC NULLS LAST, created_at ASC FOR UPDATE
+      `, [actor.userId]);
+      for (const lot of lots.rows) {
+        if (remaining <= 0) break;
+        const reserved = Math.min(remaining, number(lot.available_amount));
+        await client.query(`UPDATE quota_lots SET available_amount = available_amount - $1, frozen_amount = frozen_amount + $1 WHERE id = $2`, [reserved, lot.id]);
+        await client.query(`INSERT INTO quota_reservations(run_id, quota_lot_id, reserved_amount) VALUES ($1, $2, $3)`, [databaseRunId, lot.id, reserved]);
+        remaining -= reserved;
+      }
+      if (remaining > 0) throw new Error("监控额度批次不足，请联系管理员核对额度账本");
       await client.query(`UPDATE wallets SET available_points = available_points - $1, frozen_points = frozen_points + $1, updated_at = now() WHERE user_id = $2`, [frozenPoints, actor.userId]);
       await client.query(`INSERT INTO wallet_ledger(user_id, kind, amount, balance_after, reference_id, reason, idempotency_key) VALUES ($1, 'FREEZE', $2, $3, $4, '创建监控任务，冻结预计配额', $5)`, [actor.userId, -frozenPoints, balanceAfter, displayId, `run:${databaseRunId}:freeze`]);
     }
-    const job: MonitorWorkerJob = { runId: databaseRunId, displayRunId: displayId, userId: actor.userId, projectId, projectName: project.name, zipCode: project.zipCode, scanDepth: project.scanDepth, dimensions: project.dimensions, items, receipt, evidenceDirectory: `/app/evidence/${databaseRunId}` };
+    const job: MonitorWorkerJob = { runId: databaseRunId, displayRunId: displayId, userId: actor.userId, projectId, projectName: project.name, marketplace: project.marketplace, zipCode: project.zipCode, scanDepth: project.scanDepth, dimensions: project.dimensions, items, receipt, evidenceDirectory: `/app/evidence/${databaseRunId}` };
     await client.query(`INSERT INTO run_outbox(run_id, payload) VALUES ($1, $2::jsonb)`, [databaseRunId, JSON.stringify(job)]);
     return { databaseRunId, displayId };
   });
@@ -452,8 +517,17 @@ export async function cancelRun(actor: StoreActor, id: string) {
     if (run.status !== "QUEUED") return;
     const refund = number(run.frozen_points);
     await client.query(`UPDATE monitor_runs SET status = 'CANCELLED', completed_at = now(), refunded_points = $1, cancel_requested = true WHERE id = $2`, [refund, run.id]);
+    if (run.receipt?.meteringMode === "trial") {
+      await client.query(`UPDATE users SET trial_used = false, updated_at = now() WHERE id = $1 AND membership_status = 'TRIAL'`, [actor.userId]);
+      await client.query(`INSERT INTO audit_logs(actor_id, action, resource_type, resource_id, details) VALUES ($1, 'TRIAL_RESTORED', 'RUN', $2, $3::jsonb)`, [actor.userId, run.display_id, JSON.stringify({ reason: "任务在执行前取消" })]);
+    }
     if (run.receipt?.meteringMode === "wallet" && refund > 0) {
       const wallet = await client.query(`SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE`, [actor.userId]);
+      const reservations = await client.query(`SELECT qr.*, ql.id lot_id FROM quota_reservations qr JOIN quota_lots ql ON ql.id = qr.quota_lot_id WHERE qr.run_id = $1 AND qr.settled_at IS NULL FOR UPDATE OF qr, ql`, [run.id]);
+      for (const reservation of reservations.rows) {
+        await client.query(`UPDATE quota_lots SET available_amount = available_amount + $1, frozen_amount = greatest(0, frozen_amount - $1) WHERE id = $2`, [reservation.reserved_amount, reservation.lot_id]);
+        await client.query(`UPDATE quota_reservations SET refunded_amount = reserved_amount, settled_at = now() WHERE run_id = $1 AND quota_lot_id = $2`, [run.id, reservation.lot_id]);
+      }
       await client.query(`UPDATE wallets SET available_points = available_points + $1, frozen_points = greatest(0, frozen_points - $1), refunded_points = refunded_points + $1, updated_at = now() WHERE user_id = $2`, [refund, actor.userId]);
       await client.query(`INSERT INTO wallet_ledger(user_id, kind, amount, balance_after, reference_id, reason, idempotency_key) VALUES ($1, 'REFUND', $2, $3, $4, '任务取消，退回未执行配额', $5) ON CONFLICT (idempotency_key) DO NOTHING`, [actor.userId, refund, number(wallet.rows[0].available_points) + refund, run.display_id, `run:${run.id}:refund`]);
     }
@@ -471,7 +545,21 @@ export async function adjustWallet(actor: StoreActor, userId: string, amount: nu
     const wallet = await client.query(`SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE`, [userId]);
     if (!wallet.rows[0]) throw new Error("用户钱包不存在");
     const next = number(wallet.rows[0].available_points) + amount;
-    if (next < 0) throw new Error("扣减后可用点数不能为负数");
+    if (next < 0) throw new Error("扣减后可用监控额度不能为负数");
+    if (amount > 0) {
+      const sourceRef = `admin:${actor.userId}:${randomUUID()}`;
+      await client.query(`INSERT INTO quota_lots(user_id, kind, granted_amount, available_amount, source_ref) VALUES ($1, 'ADMIN', $2, $2, $3)`, [userId, amount, sourceRef]);
+    } else {
+      let remaining = Math.abs(amount);
+      const lots = await client.query(`SELECT * FROM quota_lots WHERE user_id = $1 AND available_amount > 0 ORDER BY expires_at ASC NULLS LAST, created_at ASC FOR UPDATE`, [userId]);
+      for (const lot of lots.rows) {
+        if (remaining <= 0) break;
+        const deduction = Math.min(remaining, number(lot.available_amount));
+        await client.query(`UPDATE quota_lots SET available_amount = available_amount - $1, consumed_amount = consumed_amount + $1 WHERE id = $2`, [deduction, lot.id]);
+        remaining -= deduction;
+      }
+      if (remaining > 0) throw new Error("额度批次余额不足，无法完成扣减");
+    }
     await client.query(`UPDATE wallets SET available_points = $1, updated_at = now() WHERE user_id = $2`, [next, userId]);
     await client.query(`INSERT INTO wallet_ledger(user_id, kind, amount, balance_after, reason, actor_id, idempotency_key) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, amount > 0 ? "RECHARGE" : "DEDUCT", amount, next, reason, actor.userId, `admin:${actor.userId}:${randomUUID()}`]);
     await client.query(`INSERT INTO audit_logs(actor_id, action, resource_type, resource_id, details) VALUES ($1, 'WALLET_ADJUST', 'wallet', $2, $3::jsonb)`, [actor.userId, userId, JSON.stringify({ amount, reason })]);

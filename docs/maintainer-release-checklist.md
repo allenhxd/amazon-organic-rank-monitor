@@ -1,6 +1,6 @@
 # Maintainer release checklist
 
-## Before v0.1.0
+## Before each release
 
 - [ ] Frozen install, typecheck, lint, complete tests, production build.
 - [ ] Production dependency audit and generated license inventory pass.

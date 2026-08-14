@@ -6,7 +6,7 @@ import IORedis from "ioredis";
 import { cookies } from "next/headers";
 import type { UserAccount } from "@/domain/types";
 import { ADMIN_SESSION_COOKIE, SESSION_COOKIE } from "@/domain/constants";
-import { createInitialAdminCredential, getAccountByEmail, getAccountById, getAdminCredentialByUsername } from "@/server/store";
+import { createInitialAdminCredential, getAccountByEmail, getAccountById, getAdminCredentialByUsername, registerTrialAccount } from "@/server/store";
 import { hashAdminPassword, verifyAdminPassword } from "@/server/password";
 import { smtpConfig } from "@/server/config";
 
@@ -141,8 +141,6 @@ export async function setupInitialAdminCredential(actor: { userId: string; role:
 
 export async function issueOtp(emailValue: string, ipValue = "unknown") {
   const email = emailValue.trim().toLocaleLowerCase("en-US");
-  const account = await getAccountByEmail(email);
-  if (!account) throw new Error("该邮箱尚未开通账户，请联系管理员");
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   if (process.env.AUTH_MODE === "production") {
     const emailKey = createHash("sha256").update(email).digest("hex").slice(0, 24);
@@ -165,8 +163,8 @@ export async function issueOtp(emailValue: string, ipValue = "unknown") {
     await transporter.sendMail({
       from: config.from,
       to: email,
-      subject: "自然排名监控工具登录验证码",
-      text: `您的验证码是 ${code}，10 分钟内有效且只能使用一次。`,
+      subject: "自然排名监控工具登录或注册验证码",
+      text: `您的验证码是 ${code}，10 分钟内有效且只能使用一次。新邮箱验证成功后将自动创建试用账号。`,
     });
   } else if (process.env.NODE_ENV === "production") {
     throw new Error("邮件服务尚未配置");
@@ -196,7 +194,6 @@ export async function consumeOtp(emailValue: string, code: string, ipValue = "un
     if (record.digest !== digest(code.trim())) throw new Error("验证码错误");
     record.used = true;
   }
-  const account = await getAccountByEmail(email);
-  if (!account) throw new Error("账户不存在");
+  const account = await getAccountByEmail(email) || await registerTrialAccount(email);
   return { account, token: signSession({ userId: account.id, role: "USER", purpose: "user", expiresAt: Date.now() + SESSION_LENGTH }) };
 }

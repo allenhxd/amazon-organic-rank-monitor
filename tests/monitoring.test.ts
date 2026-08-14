@@ -3,7 +3,7 @@ import { canReplaceEffectiveResult, organicCandidates, resolveEligibleDisplayedA
 import type { RankResult } from "@/domain/types";
 
 const pages = (completed: boolean[]) => completed.map((value, index) => ({ pageNumber: index + 1, completed: value, zipVerified: value, cardsClassified: value, evidenceCaptured: value }));
-const baseResult = (state: RankResult["state"]): RankResult => ({ id: "x", runId: "r", projectId: "p", monitorItemId: "m", category: "c", productType: "自有", childAsin: "B000DEMO01", displayedAsin: null, keyword: "k", state, naturalPage: null, naturalRow: null, naturalColumn: null, naturalOrdinal: null, matchType: null, priceUsd: null, coupon: null, monthlySales: null, stock: null, seller: null, rating: null, ratingCount: null, ratingDistribution: null, note: "", observedAt: null });
+const baseResult = (state: RankResult["state"]): RankResult => ({ id: "x", runId: "r", projectId: "p", monitorItemId: "m", category: "c", productType: "自有", childAsin: "B000DEMO01", displayedAsin: null, keyword: "k", state, naturalPage: null, naturalRow: null, naturalColumn: null, naturalOrdinal: null, matchType: null, priceAmount: null, currency: "USD", coupon: null, monthlySales: null, stock: null, seller: null, rating: null, ratingCount: null, ratingDistribution: null, note: "", observedAt: null });
 
 describe("结果状态", () => {
   it("全部要求页面完成且无匹配才是暂无", () => expect(resolveResultState(pages([true, true, true]), 3, false)).toBe("暂无"));

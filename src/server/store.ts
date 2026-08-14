@@ -24,6 +24,11 @@ export async function getAccountById(userId: string) {
   return demo.getSnapshot().users.find((user) => user.id === userId) || null;
 }
 
+export async function registerTrialAccount(email: string) {
+  if (productionData()) return postgres.registerTrialAccount(email);
+  return demo.registerTrialAccount(email);
+}
+
 export async function hasAdminCredential() {
   if (productionData()) return postgres.hasAdminCredential();
   return false;

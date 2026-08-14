@@ -17,6 +17,7 @@ import { useAppSnapshot } from "@/components/app-provider";
 import { EmptyState, Loading, Modal, Notice, ProgressBar } from "@/components/ui";
 import { estimatePoints } from "@/domain/pricing";
 import { formatNaturalRank } from "@/domain/monitoring";
+import { enabledMarketplaces, MARKETPLACES, type Marketplace } from "@/domain/marketplaces";
 import type { CollectionDimensions, MonitorItem, MonitorRun, ProductType, Project } from "@/domain/types";
 
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -82,6 +83,7 @@ export function MonitorWorkspace() {
   const [run, setRun] = useState<MonitorRun | null>(snapshot.runs[0] || null);
   const [message, setMessage] = useState<{ tone: "success" | "danger" | "warning"; text: string } | null>(null);
   const [starting, setStarting] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const syncProject = useCallback(async () => {
     const nextSnapshot = await refresh();
@@ -189,19 +191,20 @@ export function MonitorWorkspace() {
       <section className="panel settings-panel">
         <div className="settings-title">项目设置</div>
         <div className="settings-grid">
-          <div className="field"><label>站点</label><input readOnly value={localProject.marketplace} /></div>
-          <div className="field"><label htmlFor="zip">邮编（ZIP Code）</label><input id="zip" value={localProject.zipCode} maxLength={5} onChange={(event) => setLocalProject({ ...localProject, zipCode: event.target.value.replace(/\D/g, "") })} onBlur={() => void persistProject({ zipCode: localProject.zipCode })} /></div>
+          <div className="field"><label htmlFor="marketplace">站点</label><select id="marketplace" value={localProject.marketplace} onChange={(event) => { const marketplace = event.target.value as Marketplace; const next = { ...localProject, marketplace, zipCode: "" }; setLocalProject(next); void persistProject({ marketplace, zipCode: "" }); }}>{(Object.keys(MARKETPLACES) as Marketplace[]).map((marketplace) => { const enabled = enabledMarketplaces().includes(marketplace); return <option key={marketplace} value={marketplace} disabled={!enabled}>{MARKETPLACES[marketplace].label}{enabled ? "" : "（真实回归通过后开放）"}</option>; })}</select></div>
+          <div className="field"><label htmlFor="postal-preset">常用地区</label><select id="postal-preset" value={MARKETPLACES[localProject.marketplace].postalPresets.some((item) => item.value === localProject.zipCode) ? localProject.zipCode : ""} onChange={(event) => { const zipCode = event.target.value; setLocalProject({ ...localProject, zipCode }); void persistProject({ zipCode }); }}><option value="">请选择常用地区</option>{MARKETPLACES[localProject.marketplace].postalPresets.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</select></div>
+          <div className="field"><label htmlFor="zip">手动输入邮编</label><input id="zip" value={localProject.zipCode} maxLength={10} placeholder={MARKETPLACES[localProject.marketplace].postalExample} onChange={(event) => setLocalProject({ ...localProject, zipCode: event.target.value.toUpperCase() })} onBlur={() => { if (localProject.zipCode) void persistProject({ zipCode: localProject.zipCode }); }} /></div>
           <div className="field"><label>显示基线（固定）</label><input readOnly value="1920×1080 / 100%" title="DPR 固定为 1；物理显示器尺寸不是统计口径" /></div>
           <div className="field"><label htmlFor="depth">扫描深度</label><select id="depth" value={localProject.scanDepth} onChange={(event) => { const scanDepth = Number(event.target.value) as 1 | 2 | 3; setLocalProject({ ...localProject, scanDepth }); void persistProject({ scanDepth }); }}><option value={1}>1 页</option><option value={2}>2 页</option><option value={3}>3 页</option></select></div>
           <div className="field"><label>排名口径</label><select value={localProject.rankingPolicy} disabled><option>广告排除后的自然行</option></select></div>
-          <button className="button button-quiet" type="button">高级选项 <ChevronUp size={15} /></button>
+          <button className="button button-quiet" type="button" aria-expanded={advancedOpen} aria-controls="advanced-options" onClick={() => setAdvancedOpen((open) => !open)}>高级选项 <ChevronUp size={15} style={{ transform: advancedOpen ? undefined : "rotate(180deg)" }} /></button>
         </div>
-        <div className="settings-advanced">
+        {advancedOpen ? <div className="settings-advanced" id="advanced-options">
           <strong>高级选项（可选）</strong>
           <div className="advanced-options">
             {dimensions.map(({ key, label }) => <label className="checkbox-row" key={key}><input type="checkbox" checked={localProject.dimensions[key]} onChange={(event) => changeDimension(key, event.target.checked)} />{label}</label>)}
           </div>
-        </div>
+        </div> : null}
       </section>
 
       <div className="monitor-grid">
@@ -228,7 +231,7 @@ export function MonitorWorkspace() {
               </tbody>
             </table>
           </div>
-          <div className="table-footnote">支持所有 Amazon 美国站普通商品品类；同一 ASIN 可对应多个关键词。</div>
+          <div className="table-footnote">支持已开放站点的普通商品品类；同一 ASIN 可对应多个关键词。加拿大站和墨西哥站只会在真实回归通过后开放。</div>
         </section>
 
         <aside className="panel estimate-panel">
@@ -236,7 +239,7 @@ export function MonitorWorkspace() {
             <a className="button" href="/自然排名监控导入模板.xlsx" download><Download size={16} />下载导入模板</a>
             <button className="button button-primary" onClick={() => setModal("import")}><FileUp size={16} />导入 Excel</button>
           </div>
-          <h2>{snapshot.meteringEnabled ? "预计监控点数" : "预计页面请求"} <CircleHelp size={15} /></h2>
+          <h2>{snapshot.meteringEnabled ? "预计监控额度" : "预计页面请求"} <CircleHelp size={15} /></h2>
           <div className="estimate-units">
             <div className="estimate-unit"><span>关键词搜索页</span><strong>{estimate.searchPages} 页</strong></div>
             <div className="estimate-unit"><span>ASIN 详情页</span><strong>{estimate.detailPages} 个</strong></div>
@@ -244,11 +247,11 @@ export function MonitorWorkspace() {
           </div>
           <div className="estimate-formula">搜索页＋详情页＋评分主体</div>
           {snapshot.meteringEnabled ? <>
-            <div className="estimate-total"><span>预计监控点数</span><strong>{estimate.total.toLocaleString("zh-CN")} 点</strong></div>
+            <div className="estimate-total"><span>预计监控额度</span><strong>{estimate.total.toLocaleString("zh-CN")} 额度</strong></div>
             <div className="estimate-note">* 创建任务时冻结，任务完成后按实际成功请求结算。</div>
           </> : <>
             <div className="estimate-total"><span>预计请求数量</span><strong>{estimate.total.toLocaleString("zh-CN")} 次</strong></div>
-            <div className="estimate-note">* 钱包计量已关闭；仍记录实际成功页面请求数量，不冻结或扣除点数。</div>
+            <div className="estimate-note">* 额度计量已关闭；仍记录实际成功页面请求数量，不冻结或扣除额度。</div>
           </>}
           <button className="button button-primary button-large" disabled={starting || Boolean(run && ["等待中", "执行中"].includes(run.status))} onClick={() => void start()}>{starting ? <Loading label="正在创建" /> : "开始执行"}</button>
         </aside>
@@ -293,7 +296,7 @@ function ResultsPanel({ run, results }: { run: MonitorRun | null; results: Monit
     <section className="panel results-panel">
       <div className="panel-heading"><h2>结果预览（实时更新）</h2><div className="heading-actions">{run?.results.length ? <a className="button" href={`/api/exports/${encodeURIComponent(run.id)}`}><Upload size={16} />导出完整 Excel</a> : null}</div></div>
       {results.length ? (
-        <div className="results-wrap"><table className="data-table"><thead><tr><th>类目</th><th>子ASIN</th><th>关键词</th><th>自然排名</th><th>自然商品序号</th><th>售价（USD）</th><th>评分</th><th>状态</th><th>更新时间</th></tr></thead><tbody>{results.map((result) => <tr key={result.id}><td className="left">{result.category}</td><td>{result.childAsin}</td><td className="left">{result.keyword}</td><td>{formatNaturalRank(result)}</td><td>{result.naturalOrdinal ?? "--"}</td><td>{result.priceUsd?.toFixed(2) ?? "--"}</td><td>{result.rating ? <>{result.rating.toFixed(1)} <span className="rating-star">★</span> ({result.ratingCount?.toLocaleString("en-US")})</> : "--"}</td><td className={result.state === "已完成" ? "status-success" : result.state === "暂无" ? "status-muted" : "status-warning"}>{result.state}</td><td>{result.observedAt ? new Date(result.observedAt).toLocaleString("zh-CN", { hour12: false }) : "--"}</td></tr>)}</tbody></table></div>
+        <div className="results-wrap"><table className="data-table"><thead><tr><th>类目</th><th>子ASIN</th><th>关键词</th><th>自然排名</th><th>自然商品序号</th><th>售价</th><th>评分</th><th>状态</th><th>更新时间</th></tr></thead><tbody>{results.map((result) => <tr key={result.id}><td className="left">{result.category}</td><td>{result.childAsin}</td><td className="left">{result.keyword}</td><td>{formatNaturalRank(result)}</td><td>{result.naturalOrdinal ?? "--"}</td><td>{result.priceAmount === null ? "--" : `${result.currency} ${result.priceAmount.toFixed(2)}`}</td><td>{result.rating ? <>{result.rating.toFixed(1)} <span className="rating-star">★</span> ({result.ratingCount?.toLocaleString("en-US")})</> : "--"}</td><td className={result.state === "已完成" ? "status-success" : result.state === "暂无" ? "status-muted" : "status-warning"}>{result.state}</td><td>{result.observedAt ? new Date(result.observedAt).toLocaleString("zh-CN", { hour12: false }) : "--"}</td></tr>)}</tbody></table></div>
       ) : <EmptyState title="尚无正式结果" detail="创建任务后，这里会显示实时结果；系统不会用旧值或 0 填补未完成数据。" />}
     </section>
   );

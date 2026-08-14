@@ -11,6 +11,7 @@ import type {
   UserAccount,
   WalletLedger,
 } from "@/domain/types";
+import { enabledMarketplaces, MARKETPLACES } from "@/domain/marketplaces";
 import { estimatePoints } from "@/domain/pricing";
 import { billableEstimate, isMeteringEnabled, resolveMeteringMode } from "@/domain/metering";
 
@@ -153,8 +154,8 @@ function buildInitialState(): DemoState {
     id: projectId,
     ownerId: demoUserId,
     name: "合成示例项目",
-    marketplace: "Amazon.com（美国站）",
-    zipCode: "96038",
+    marketplace: "amazon.com",
+    zipCode: "10001",
     scanDepth: 3,
     viewport: "1920×1080 / 100% / DPR 1",
     rankingPolicy: "广告排除后的自然行",
@@ -176,6 +177,7 @@ function buildInitialState(): DemoState {
       refunded: 0,
     },
     ledger: [],
+    quotaLots: [],
     runs: [],
     rateConfig: {
       version: "rate-v1",
@@ -237,6 +239,16 @@ function buildInitialState(): DemoState {
   };
 }
 
+export function registerTrialAccount(emailValue: string) {
+  const store = state();
+  const email = emailValue.trim().toLocaleLowerCase("en-US");
+  const existing = store.users.find((user) => user.email.toLocaleLowerCase("en-US") === email);
+  if (existing) return structuredClone(existing);
+  const account: UserAccount = { id: randomUUID(), email, name: email.split("@")[0] || "新用户", role: "USER", membershipStatus: "试用", membershipExpiresAt: null, trialApproved: true, trialUsed: false };
+  store.users.push(account);
+  return structuredClone(account);
+}
+
 declare global {
   var __rankMonitorDemoState: DemoState | undefined;
 }
@@ -278,7 +290,8 @@ function resultFor(item: MonitorItem, run: MonitorRun, index: number): RankResul
     naturalColumn: completed ? ((index % 4) + 1) : null,
     naturalOrdinal: completed ? (row ? row * 4 - 2 : null) : null,
     matchType: completed ? "直接命中" : null,
-    priceUsd: index < 2 ? 69.99 : index < 4 ? 29.99 : 39.99,
+    priceAmount: index < 2 ? 69.99 : index < 4 ? 29.99 : 39.99,
+    currency: "USD",
     coupon: null,
     monthlySales: null,
     stock: "有货",
@@ -460,6 +473,7 @@ export function startRun(projectIdValue: string) {
   if (activeRun) throw new Error("每个用户同时只能执行一个任务");
   const project = store.projects.find((candidate) => candidate.id === projectIdValue);
   if (!project) throw new Error("项目不存在");
+  if (!enabledMarketplaces().includes(project.marketplace)) throw new Error("所选站点尚未完成真实回归，当前实例未开放");
   if (!project.items.some((item) => item.enabled)) throw new Error("请至少添加一个启用的 ASIN 与关键词");
   const estimate = estimatePoints(project.items, project.scanDepth, project.dimensions, store.rateConfig);
   const meteringMode = resolveMeteringMode(process.env.METERING_MODE);
@@ -488,20 +502,22 @@ export function startRun(projectIdValue: string) {
     startedAt: null,
     completedAt: null,
     receipt: {
-      protocolVersion: "organic-rank-v3-web",
-      marketplace: "amazon.com",
+      protocolVersion: "organic-rank-v4-web",
+      marketplace: project.marketplace,
       zipCode: project.zipCode,
       viewport: "1920×1080",
       zoom: "100%",
       dpr: 1,
-      locale: "en-US",
+      locale: MARKETPLACES[project.marketplace].locale,
+      timezone: MARKETPLACES[project.marketplace].timezone,
+      currency: MARKETPLACES[project.marketplace].currency,
       signedIn: false,
       isolatedSession: true,
       scanDepth: project.scanDepth,
       rankingPolicy: "广告排除后的自然行",
       rateVersion: store.rateConfig.version,
       meteringMode,
-      workerVersion: "demo-worker-0.1.0",
+      workerVersion: "demo-worker-0.1.1",
       adRankFieldsStored: false,
     },
     results: [],

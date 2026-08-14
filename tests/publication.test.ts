@@ -11,6 +11,7 @@ describe("开源发布内容", () => {
   it("管理员初始化审计 SQL 对复用 UUID 参数使用一致类型", async () => {
     const source = await fs.readFile(path.join(root, "src/server/postgres-store.ts"), "utf8");
     expect(source).toContain("VALUES ($1::uuid, 'ADMIN_CREDENTIAL_CREATED', 'ADMIN_CREDENTIAL', $1::uuid::text, $2::jsonb)");
+    expect(source).toContain("VALUES ($1::uuid, 'TRIAL_ACCOUNT_CREATED', 'USER', $1::uuid::text, $2::jsonb)");
   });
 
   it("模板与演示数据库只包含允许的合成 ASIN", async () => {
@@ -43,5 +44,11 @@ describe("开源发布内容", () => {
     const text = (await Promise.all(paths.map((file) => fs.readFile(path.join(root, file), "utf8")))).join("\n");
     expect(text).not.toMatch(/maixora|smtp\.qq\.com|BEGIN (RSA |OPENSSH )?PRIVATE KEY/i);
     expect(text).toMatch(/replace-with/);
+  });
+
+  it("界面、文档和迁移不恢复特定云厂商或固定商业售价", async () => {
+    const paths = ["src/app/welcome/page.tsx", "src/app/guide/page.tsx", "src/app/settings/page.tsx", "infra/schema.sql", "README.md", "README.zh-CN.md"];
+    const text = (await Promise.all(paths.map((file) => fs.readFile(path.join(root, file), "utf8")))).join("\n");
+    expect(text).not.toMatch(/腾讯云|9\.9\s*元|9\.90|12450|11450/);
   });
 });

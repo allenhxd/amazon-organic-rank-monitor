@@ -51,6 +51,8 @@ The `migrate` service runs `infra/schema.sql` with `ON_ERROR_STOP=1`. The schema
 
 Keep `METERING_MODE=disabled` unless this instance needs an internal quota ledger. To enable it, set `METERING_MODE=wallet`, choose `INITIAL_ADMIN_POINTS`, restart web and worker, then adjust user allocation from the administration page.
 
+`ENABLED_MARKETPLACES` defaults to `amazon.com`. It is a Web build-time setting, so changing it requires rebuilding the Web image. Amazon.ca and Amazon.com.mx are code-gated previews in v0.1.1 and are not part of the release acceptance claim; keep them disabled until a manual low-frequency regression verifies location, search, Sponsored exclusion, details, and ratings for that marketplace.
+
 ## Manual live acceptance
 
 CI and the local demo must not contact Amazon. If the operator determines live access is permitted, keep acceptance manual and low-frequency: one ASIN, one keyword, one page, one worker. Stop immediately on CAPTCHA or any access-control signal. Do not use proxies or bypass tooling.

@@ -2,10 +2,11 @@ import type { RateConfig } from "@/domain/types";
 import type { SuccessfulRequests } from "@/domain/settlement";
 import { calculateSettlement } from "@/domain/settlement";
 
-export type MeteringMode = "disabled" | "wallet";
+export type MeteringMode = "disabled" | "wallet" | "trial";
 
 export function resolveMeteringMode(value: string | null | undefined): MeteringMode {
-  return value?.trim().toLocaleLowerCase("en-US") === "wallet" ? "wallet" : "disabled";
+  const normalized = value?.trim().toLocaleLowerCase("en-US");
+  return normalized === "wallet" ? "wallet" : normalized === "trial" ? "trial" : "disabled";
 }
 
 export function isMeteringEnabled(value: string | null | undefined = process.env.METERING_MODE) {

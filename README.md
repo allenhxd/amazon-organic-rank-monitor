@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) · [Self-hosting](docs/self-hosting.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
-A self-hosted monitoring tool for Amazon.com organic search position, price, coupons, availability, seller, rating, and review-count evidence. The interface is intentionally Chinese; this English README is the primary project overview.
+A self-hosted monitoring tool for Amazon organic search position, price, coupons, availability, seller, rating, and review-count evidence. Amazon.com is enabled by default; Amazon.ca and Amazon.com.mx adapters remain gated until their manual live regression is complete. The interface is intentionally Chinese; this English README is the primary project overview.
 
 ![Synthetic local demo showing the project workspace](docs/images/project-dashboard.png)
 
@@ -22,8 +22,10 @@ Core principles:
 
 - Next.js web UI with PostgreSQL persistence.
 - Redis OTP/rate limiting and BullMQ task delivery.
-- Playwright worker with logged-out, isolated Amazon.com sessions.
-- Fixed 1920×1080 viewport, DPR 1, `en-US`, configurable five-digit ZIP, and one-to-three-page scan depth.
+- Playwright worker with logged-out, isolated marketplace sessions.
+- Marketplace-aware domains, postal codes, locales, timezones, currencies, Sponsored labels, fixed 1920×1080/DPR 1, and one-to-three-page scan depth.
+- New-email registration with one bounded trial run; trial failures with zero successful requests remain retryable.
+- Optional auditable quota lots and per-run reservations when wallet metering is enabled.
 - Excel import/export with a 5 MB and 10,000-row limit.
 - Bounded OOXML ZIP validation before SheetJS parsing: paths, entry count, compression, expanded size, encryption, macros, and corruption are checked.
 - Run receipts and page/family evidence for auditability.
@@ -69,6 +71,9 @@ Important settings:
 | `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | SMTP credentials and sender |
 | `TLS_EMAIL` | Certificate expiry/issuance notifications |
 | `METERING_MODE` | `disabled` by default or `wallet` |
+| `ENABLED_MARKETPLACES` | `amazon.com` by default; changing it requires rebuilding the web image |
+
+Canada and Mexico are intentionally not part of the v0.1.1 acceptance claim. Keep `ENABLED_MARKETPLACES=amazon.com` unless you are conducting your own manual, low-frequency validation and are prepared to treat any unverified result as incomplete.
 
 Deployment, upgrade, backup/restore, and security details live in `docs/`.
 

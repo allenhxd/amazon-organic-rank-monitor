@@ -7,6 +7,8 @@
 5. Run the one-shot migration and confirm it exits successfully.
 6. Start the new stack and check `/api/health`, login, project listing, one synthetic import, and export.
 
+For `v0.1.1`, the idempotent migration adds marketplace/currency fields and quota-lot tables, backfills legacy USD prices, and converts each existing positive wallet balance into one administrator quota lot. Confirm that wallet totals and quota-lot available totals match before enabling `METERING_MODE=wallet`.
+
 ```bash
 ./infra/scripts/backup-db.sh
 git fetch --tags

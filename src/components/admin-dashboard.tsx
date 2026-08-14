@@ -11,6 +11,7 @@ export function AdminDashboard() {
   const [reason, setReason] = useState("管理员配额调整");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState(snapshot.currentUser.id);
   const running = snapshot.runs.filter((run) => ["等待中", "执行中"].includes(run.status)).length;
 
   const submit = async (event: FormEvent) => {
@@ -21,12 +22,12 @@ export function AdminDashboard() {
       const response = await fetch("/api/admin/wallet-adjustments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: snapshot.currentUser.id, amount: Number(amount), reason }),
+        body: JSON.stringify({ userId: selectedUserId, amount: Number(amount), reason }),
       });
       const body = await response.json();
       if (!response.ok || !body.ok) throw new Error(body.error || "调整失败");
       await refresh();
-      setMessage("点数调整已写入不可变流水。");
+      setMessage("监控额度调整已写入不可变流水。");
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -40,7 +41,7 @@ export function AdminDashboard() {
       <p className="section-subtitle">管理自托管实例的用户、运行队列与可选钱包计量。</p>
       <div className="stat-grid">
         <AdminStat icon={<UsersRound />} label="用户数" value={String(snapshot.users.length)} />
-        <AdminStat icon={<Coins />} label={snapshot.meteringEnabled ? "用户可用点数" : "钱包计量"} value={snapshot.meteringEnabled ? snapshot.wallet.available.toLocaleString("zh-CN") : "未启用"} />
+        <AdminStat icon={<Coins />} label={snapshot.meteringEnabled ? "当前管理员可用额度" : "额度计量"} value={snapshot.meteringEnabled ? snapshot.wallet.available.toLocaleString("zh-CN") : "未启用"} />
         <AdminStat icon={<ServerCog />} label="运行中任务" value={String(running)} />
         <AdminStat icon={<Database />} label="成功请求" value={String(snapshot.runs.reduce((sum, run) => sum + run.progress.searchCompleted + run.progress.detailCompleted + run.progress.ratingCompleted, 0))} />
       </div>
@@ -50,24 +51,24 @@ export function AdminDashboard() {
           <section className="panel content-panel">
             <h2>人工配额调整</h2>
             <form onSubmit={submit} className="form-grid">
-              <div className="field"><label>用户</label><select value={snapshot.currentUser.id} disabled><option value={snapshot.currentUser.id}>{snapshot.currentUser.name}（{snapshot.currentUser.email}）</option></select></div>
-              <div className="field"><label>调整点数</label><input type="number" value={amount} onChange={(event) => setAmount(event.target.value)} /></div>
+              <div className="field"><label>用户</label><select value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)}>{snapshot.users.map((user) => <option key={user.id} value={user.id}>{user.name}（{user.email}）</option>)}</select></div>
+              <div className="field"><label>调整额度</label><input type="number" value={amount} onChange={(event) => setAmount(event.target.value)} /></div>
               <div className="field span-2"><label>原因（必填）</label><input value={reason} onChange={(event) => setReason(event.target.value)} /></div>
               <div className="span-2"><button className="button button-primary" disabled={busy}>{busy ? <Loading /> : "确认并写入流水"}</button></div>
             </form>
             {message ? <div style={{ marginTop: 12 }}><Notice tone={message.includes("已写入") ? "success" : "danger"}>{message}</Notice></div> : null}
           </section>
           <section className="panel content-panel">
-            <h2>点数费率</h2>
+            <h2>监控额度费率</h2>
             <ul className="simple-list">
-              <li><span>搜索页</span><strong>{snapshot.rateConfig.searchPage} 点/页</strong></li>
-              <li><span>ASIN 详情页</span><strong>{snapshot.rateConfig.detailPage} 点/个</strong></li>
-              <li><span>评分主体</span><strong>{snapshot.rateConfig.ratingSubject} 点/个</strong></li>
+              <li><span>搜索页</span><strong>{snapshot.rateConfig.searchPage} 额度/页</strong></li>
+              <li><span>ASIN 详情页</span><strong>{snapshot.rateConfig.detailPage} 额度/个</strong></li>
+              <li><span>评分主体</span><strong>{snapshot.rateConfig.ratingSubject} 额度/个</strong></li>
               <li><span>生效版本</span><strong>{snapshot.rateConfig.version}</strong></li>
             </ul>
           </section>
         </div>
-      ) : <Notice>钱包计量未启用。任务不会冻结、扣除或退回点数，但实际成功请求数量仍会保存在运行凭证中。</Notice>}
+      ) : <Notice>额度计量未启用。任务不会冻结、扣除或退回额度，但实际成功请求数量仍会保存在运行凭证中。</Notice>}
 
       <section className="panel" style={{ marginTop: 16 }}>
         <div className="panel-heading"><h2>实例成本记录</h2></div>

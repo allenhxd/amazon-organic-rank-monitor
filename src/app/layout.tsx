@@ -7,7 +7,7 @@ import { getOptionalActor, getOptionalAdminActor } from "@/server/auth";
 
 export const metadata: Metadata = {
   title: "自然排名监控工具｜亚马逊排名监控",
-  description: "Amazon 美国站自然排名、价格与评分监控工具",
+  description: "Amazon 北美站点自然排名、价格与评分监控工具",
 };
 
 export const dynamic = "force-dynamic";

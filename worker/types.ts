@@ -1,4 +1,5 @@
 import type { CollectionDimensions, MonitorItem, RankResult, RunProgress, RunReceipt } from "../src/domain/types";
+import type { Marketplace } from "../src/domain/marketplaces";
 
 export type MonitorWorkerJob = {
   runId: string;
@@ -6,6 +7,7 @@ export type MonitorWorkerJob = {
   userId: string;
   projectId: string;
   projectName: string;
+  marketplace: Marketplace;
   zipCode: string;
   scanDepth: 1 | 2 | 3;
   dimensions: CollectionDimensions;

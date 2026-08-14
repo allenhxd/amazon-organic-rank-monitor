@@ -3,6 +3,7 @@ import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { organicCandidates, shouldAbortRunOnCaptcha, shouldRetryMonitorAttempt } from "../src/domain/monitoring";
 import type { MonitorItem, RankResult, RunProgress } from "../src/domain/types";
+import { MARKETPLACES, normalizePostalCode } from "../src/domain/marketplaces";
 import type { MonitorWorkerJob, WorkerFamilyEvidence, WorkerHooks, WorkerOutput, WorkerPageEvidence } from "./types";
 
 type SearchCard = {
@@ -21,8 +22,10 @@ type SearchPageResult = WorkerPageEvidence & { cards: SearchCard[] };
 const compact = (value: string | null | undefined) => String(value || "").replace(/\s+/g, " ").trim();
 const now = () => new Date().toISOString();
 const slug = (value: string) => value.toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || "keyword";
-const isCaptchaError = (value: unknown) => /captcha|robot check|验证码/i.test(value instanceof Error ? value.message : String(value || ""));
-const pageHasCaptcha = async (page: Page) => /captcha|robot check|enter the characters you see below/i.test(await page.locator("body").innerText().catch(() => ""));
+const captchaPattern = /captcha|robot check|enter the characters you see below|验证码|escribe los caracteres|ingresa los caracteres|introduce los caracteres|saisissez les caractères/i;
+const isCaptchaError = (value: unknown) => captchaPattern.test(value instanceof Error ? value.message : String(value || ""));
+const pageHasCaptcha = async (page: Page) => captchaPattern.test(await page.locator("body").innerText().catch(() => ""));
+const locationHasPostalCode = (locationText: string, job: MonitorWorkerJob) => compact(locationText).toUpperCase().replace(/\s/g, "").includes(normalizePostalCode(job.marketplace, job.zipCode).replace(/\s/g, ""));
 
 async function launchBrowser() {
   const executablePath = process.env.CHROME_EXECUTABLE_PATH || undefined;
@@ -33,23 +36,26 @@ async function launchBrowser() {
   });
 }
 
-async function createContext(browser: Browser) {
+async function createContext(browser: Browser, job: MonitorWorkerJob) {
+  const marketplace = MARKETPLACES[job.marketplace];
   return browser.newContext({
     viewport: { width: 1920, height: 1080 },
-    locale: "en-US",
-    timezoneId: "America/Los_Angeles",
+    locale: marketplace.locale,
+    timezoneId: marketplace.timezone,
     deviceScaleFactor: 1,
     colorScheme: "light",
     reducedMotion: "reduce",
   });
 }
 
-async function ensureZip(page: Page, zipCode: string) {
-  await page.goto("https://www.amazon.com/", { waitUntil: "domcontentloaded", timeout: 45_000 });
+async function ensureZip(page: Page, job: MonitorWorkerJob) {
+  const marketplace = MARKETPLACES[job.marketplace];
+  const zipCode = job.zipCode;
+  await page.goto(`https://www.${job.marketplace}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
   await page.waitForTimeout(1_500);
   if (await pageHasCaptcha(page)) throw new Error("检测到 CAPTCHA");
   const current = compact(await page.locator("#nav-global-location-popover-link").innerText().catch(() => ""));
-  if (current.includes(zipCode)) return true;
+  if (locationHasPostalCode(current, job)) return true;
   await page.locator("#nav-global-location-popover-link").click({ timeout: 12_000 }).catch(() => null);
   await page.waitForTimeout(1_000);
   const input = page.locator("#GLUXZipUpdateInput");
@@ -58,22 +64,26 @@ async function ensureZip(page: Page, zipCode: string) {
   await page.locator("#GLUXZipUpdate input[type=submit]").click({ timeout: 10_000 });
   await page.waitForTimeout(1_400);
   if (await pageHasCaptcha(page)) throw new Error("检测到 CAPTCHA");
-  for (const selector of ["#GLUXConfirmClose", "button[name=glowDoneButton]", "button:has-text('Done')", "button:has-text('Continue')"]) {
+  for (const selector of ["#GLUXConfirmClose", "button[name=glowDoneButton]"]) {
     const candidate = page.locator(selector).first();
+    if (await candidate.isVisible().catch(() => false)) await candidate.click().catch(() => null);
+  }
+  for (const label of marketplace.locationConfirmationLabels) {
+    const candidate = page.getByRole("button", { name: label, exact: false }).first();
     if (await candidate.isVisible().catch(() => false)) await candidate.click().catch(() => null);
   }
   await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 });
   const verified = compact(await page.locator("#nav-global-location-popover-link").innerText().catch(() => ""));
-  return verified.includes(zipCode);
+  return locationHasPostalCode(verified, job);
 }
 
-async function verifyLoggedOut(page: Page) {
+async function verifyLoggedOut(page: Page, job: MonitorWorkerJob) {
   const text = compact(await page.locator("#nav-link-accountList-nav-line-1").textContent().catch(() => ""));
-  return !text || /Hello,\s*sign in/i.test(text);
+  return Boolean(text) && MARKETPLACES[job.marketplace].signedOutMarkers.some((marker) => text.toLocaleLowerCase().includes(marker.toLocaleLowerCase()));
 }
 
 async function collectSearchPage(page: Page, job: MonitorWorkerJob, keyword: string, pageNumber: number): Promise<SearchPageResult> {
-  const requestedUrl = `https://www.amazon.com/s?k=${encodeURIComponent(keyword).replaceAll("%20", "+")}&page=${pageNumber}&ref=sr_pg_${pageNumber}`;
+  const requestedUrl = `https://www.${job.marketplace}/s?k=${encodeURIComponent(keyword).replaceAll("%20", "+")}&page=${pageNumber}&ref=sr_pg_${pageNumber}`;
   let error: string | null = null;
   try {
     await page.goto(requestedUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -81,9 +91,8 @@ async function collectSearchPage(page: Page, job: MonitorWorkerJob, keyword: str
     await page.waitForSelector('#search [data-component-type="s-search-result"][data-asin]', { timeout: 9_000 }).catch(() => null);
   } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
 
-  const extracted = await page.evaluate(() => {
-    const bodyText = document.body.innerText || "";
-    const captcha = /captcha|robot check|enter the characters you see below/i.test(bodyText);
+  const captcha = await pageHasCaptcha(page);
+  const extracted = await page.evaluate((sponsoredLabels) => {
     const zipText = document.querySelector("#glow-ingress-line2")?.textContent?.trim() || "";
     const elements = [...document.querySelectorAll<HTMLElement>('#search [data-component-type="s-search-result"][data-asin]')]
       .filter((element) => {
@@ -92,8 +101,9 @@ async function collectSearchPage(page: Page, job: MonitorWorkerJob, keyword: str
       });
     const cards = elements.map((element) => {
       const rect = element.getBoundingClientRect(); const text = element.innerText || ""; const html = element.innerHTML || "";
-      const visibleSponsored = /(^|\n)\s*Sponsored\s*(\n|$)/i.test(text);
-      const ariaSponsored = [...element.querySelectorAll("[aria-label]")].some((node) => /sponsored/i.test(node.getAttribute("aria-label") || ""));
+      const isSponsoredText = (value: string) => sponsoredLabels.some((label) => value.split("\n").some((line) => line.trim().toLocaleLowerCase() === label.toLocaleLowerCase()));
+      const visibleSponsored = isSponsoredText(text);
+      const ariaSponsored = [...element.querySelectorAll("[aria-label]")].some((node) => sponsoredLabels.some((label) => (node.getAttribute("aria-label") || "").toLocaleLowerCase().includes(label.toLocaleLowerCase())));
       const metadataSponsored = /"isSponsored"\s*:\s*true|searchProductType.{0,80}SPONSORED/i.test(html);
       return {
         asin: element.dataset.asin || "",
@@ -119,11 +129,11 @@ async function collectSearchPage(page: Page, job: MonitorWorkerJob, keyword: str
         return { asin: card.asin, sponsored: card.sponsored, naturalRow: card.sponsored ? null : naturalRow, visualColumn: index + 1, naturalOrdinal: card.sponsored ? null : naturalOrdinal, x: card.x, y: card.y, title: card.title };
       });
     });
-    return { captcha, zipText, cards: ranked };
-  }).catch(() => ({ captcha: false, zipText: "", cards: [] as SearchCard[] }));
+    return { zipText, cards: ranked };
+  }, MARKETPLACES[job.marketplace].sponsoredLabels).catch(() => ({ zipText: "", cards: [] as SearchCard[] }));
 
-  const zipVerified = extracted.zipText.includes(job.zipCode);
-  const completed = !error && !extracted.captcha && zipVerified && extracted.cards.length > 0;
+  const zipVerified = locationHasPostalCode(extracted.zipText, job);
+  const completed = !error && !captcha && zipVerified && extracted.cards.length > 0;
   let screenshotPath: string | null = null;
   const targets = job.items.filter((item) => item.enabled && item.keyword.toLocaleLowerCase("en-US") === keyword.toLocaleLowerCase("en-US"));
   const matched = extracted.cards.some((card) => !card.sponsored && targets.some((target) => target.childAsin === card.asin));
@@ -131,16 +141,16 @@ async function collectSearchPage(page: Page, job: MonitorWorkerJob, keyword: str
     screenshotPath = path.join(job.evidenceDirectory, `${slug(keyword)}-p${pageNumber}.png`);
     await page.screenshot({ path: screenshotPath, fullPage: false }).catch(() => { screenshotPath = null; });
   }
-  return { keyword, pageNumber, requestedUrl, finalUrl: page.url(), completed, zipVerified, captcha: extracted.captcha, cardCount: extracted.cards.length, organicCardCount: extracted.cards.filter((card) => !card.sponsored).length, screenshotPath, error: error || (!zipVerified ? "邮编未验证" : extracted.cards.length === 0 ? "主搜索网格为空" : null), cards: extracted.cards };
+  return { keyword, pageNumber, requestedUrl, finalUrl: page.url(), completed, zipVerified, captcha, cardCount: extracted.cards.length, organicCardCount: extracted.cards.filter((card) => !card.sponsored).length, screenshotPath, error: error || (!zipVerified ? "邮编未验证" : extracted.cards.length === 0 ? "主搜索网格为空" : null), cards: extracted.cards };
 }
 
-async function collectDetail(page: Page, asin: string, navigate = true) {
-  const url = `https://www.amazon.com/dp/${asin}`;
+async function collectDetail(page: Page, job: MonitorWorkerJob, asin: string, navigate = true) {
+  const url = `https://www.${job.marketplace}/dp/${asin}`;
   if (navigate) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
     await page.waitForTimeout(1_200);
   }
-  if (/captcha|robot check/i.test(await page.locator("body").innerText().catch(() => ""))) throw new Error("详情页出现验证码");
+  if (await pageHasCaptcha(page)) throw new Error("详情页出现验证码");
   return page.evaluate(() => {
     const number = (value: string) => { const match = value.replaceAll(",", "").match(/\d+(?:\.\d+)?/); return match ? Number(match[0]) : null; };
     const text = (selector: string) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() || "";
@@ -156,15 +166,15 @@ async function collectDetail(page: Page, asin: string, navigate = true) {
       .map((row) => row.innerText.replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .join("；");
-    return { priceUsd: number(priceText), rating: number(ratingText), ratingCount: number(countText), ratingDistribution: ratingDistribution || null, coupon: coupon || null, stock: stock || null, seller: seller || null, monthlySales: salesMatch?.[1] || null };
+    return { priceAmount: number(priceText), rating: number(ratingText), ratingCount: number(countText), ratingDistribution: ratingDistribution || null, coupon: coupon || null, stock: stock || null, seller: seller || null, monthlySales: salesMatch?.[1] || null };
   });
 }
 
-async function collectRating(page: Page, asin: string) {
-  const url = `https://www.amazon.com/dp/${asin}`;
+async function collectRating(page: Page, job: MonitorWorkerJob, asin: string) {
+  const url = `https://www.${job.marketplace}/dp/${asin}`;
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
   await page.waitForTimeout(1_200);
-  if (/captcha|robot check/i.test(await page.locator("body").innerText().catch(() => ""))) throw new Error("评分主体页出现验证码");
+  if (await pageHasCaptcha(page)) throw new Error("评分主体页出现验证码");
   return page.evaluate(() => {
     const number = (value: string) => { const match = value.replaceAll(",", "").match(/\d+(?:\.\d+)?/); return match ? Number(match[0]) : null; };
     const text = (selector: string) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() || "";
@@ -176,13 +186,13 @@ async function collectRating(page: Page, asin: string) {
   });
 }
 
-async function collectFamilyEvidence(page: Page, childAsin: string, suppliedParentAsin: string | null): Promise<WorkerFamilyEvidence> {
-  const url = `https://www.amazon.com/dp/${childAsin}`;
+async function collectFamilyEvidence(page: Page, job: MonitorWorkerJob, childAsin: string, suppliedParentAsin: string | null): Promise<WorkerFamilyEvidence> {
+  const url = `https://www.${job.marketplace}/dp/${childAsin}`;
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
     await page.waitForTimeout(1_200);
     const body = await page.locator("body").innerText().catch(() => "");
-    if (/captcha|robot check/i.test(body)) throw new Error("同父体验证页出现验证码");
+    if (captchaPattern.test(body)) throw new Error("同父体验证页出现验证码");
     const extracted = await page.evaluate(() => {
       const asinPattern = /\b[A-Z0-9]{10}\b/g;
       const siblings = new Set<string>();
@@ -219,12 +229,12 @@ async function collectFamilyEvidence(page: Page, childAsin: string, suppliedPare
 }
 
 function emptyResult(job: MonitorWorkerJob, item: MonitorItem, state: "暂无" | "未完成", note: string): RankResult {
-  return { id: crypto.randomUUID(), runId: job.runId, projectId: job.projectId, monitorItemId: item.id, category: item.category, productType: item.productType, childAsin: item.childAsin, displayedAsin: null, keyword: item.keyword, state, naturalPage: null, naturalRow: null, naturalColumn: null, naturalOrdinal: null, matchType: null, priceUsd: null, coupon: null, monthlySales: null, stock: null, seller: null, rating: null, ratingCount: null, ratingDistribution: null, note, observedAt: state === "暂无" ? now() : null };
+  return { id: crypto.randomUUID(), runId: job.runId, projectId: job.projectId, monitorItemId: item.id, category: item.category, productType: item.productType, childAsin: item.childAsin, displayedAsin: null, keyword: item.keyword, state, naturalPage: null, naturalRow: null, naturalColumn: null, naturalOrdinal: null, matchType: null, priceAmount: null, currency: job.receipt.currency, coupon: null, monthlySales: null, stock: null, seller: null, rating: null, ratingCount: null, ratingDistribution: null, note, observedAt: state === "暂无" ? now() : null };
 }
 
 async function execute(job: MonitorWorkerJob, browser: Browser, hooks: WorkerHooks): Promise<WorkerOutput> {
   const startedAt = now(); await fs.mkdir(job.evidenceDirectory, { recursive: true });
-  const context = await createContext(browser); const anchor = await context.newPage();
+  const context = await createContext(browser, job); const anchor = await context.newPage();
   const activeItems = job.items.filter((item) => item.enabled);
   const keywordGroups = [...new Set(activeItems.map((item) => item.keyword.trim()))];
   const needProductDetail = job.dimensions.price || job.dimensions.coupon || job.dimensions.monthlySales || job.dimensions.stock || job.dimensions.seller || job.dimensions.rating || job.dimensions.ratingDistribution;
@@ -257,7 +267,7 @@ async function execute(job: MonitorWorkerJob, browser: Browser, hooks: WorkerHoo
     return { runId: job.runId, status: "已取消", progress, results: activeItems.map((item) => emptyResult(job, item, "未完成", "任务已由用户取消")), pageEvidence, familyEvidence, successfulRequests, startedAt, completedAt: now(), captchaDetected: pageEvidence.some((page) => page.captcha), adClickNavigationDetected: false, error: "任务已由用户取消" };
   };
   const cancelled = async () => Boolean(await hooks.shouldCancel?.());
-  const zipReady = await ensureZip(anchor, job.zipCode); const loggedOut = await verifyLoggedOut(anchor);
+  const zipReady = await ensureZip(anchor, job); const loggedOut = await verifyLoggedOut(anchor, job);
   if (!zipReady || !loggedOut) { await context.close(); throw new Error(zipReady ? "浏览器意外处于登录状态" : `邮编 ${job.zipCode} 设置失败`); }
   if (await cancelled()) return cancelledOutput();
 
@@ -287,12 +297,12 @@ async function execute(job: MonitorWorkerJob, browser: Browser, hooks: WorkerHoo
     let captchaFailure: string | null = null;
     try {
       if (familyItem) {
-        const evidence = await collectFamilyEvidence(page, asin, familyItem.parentAsin);
+        const evidence = await collectFamilyEvidence(page, job, asin, familyItem.parentAsin);
         familyEvidence.push(evidence); pageCompleted = evidence.pageCompleted;
         if (isCaptchaError(evidence.error)) captchaFailure = evidence.error;
-        if (needProductDetail && evidence.pageCompleted) details.set(asin, await collectDetail(page, asin, false));
+        if (needProductDetail && evidence.pageCompleted) details.set(asin, await collectDetail(page, job, asin, false));
       } else if (needProductDetail) {
-        details.set(asin, await collectDetail(page, asin)); pageCompleted = true;
+        details.set(asin, await collectDetail(page, job, asin)); pageCompleted = true;
       }
       if (!pageCompleted) detailFailures.set(asin, familyEvidence.find((item) => item.childAsin === asin)?.error || "详情页未完成");
     } catch (cause) {
@@ -320,7 +330,7 @@ async function execute(job: MonitorWorkerJob, browser: Browser, hooks: WorkerHoo
   for (const asin of ratingSubjects) {
     if (await cancelled()) return cancelledOutput();
     const page = await context.newPage();
-    try { ratings.set(asin, await collectRating(page, asin)); progress.ratingCompleted += 1; successfulRequests.ratingSubjects += 1; }
+    try { ratings.set(asin, await collectRating(page, job, asin)); progress.ratingCompleted += 1; successfulRequests.ratingSubjects += 1; }
     catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       ratingFailures.set(asin, message);
@@ -357,8 +367,8 @@ async function execute(job: MonitorWorkerJob, browser: Browser, hooks: WorkerHoo
     const rating = ratings.get(ratingSubject); const ratingFailure = needRating ? ratingFailures.get(ratingSubject) : null;
     const failures = [!fullyComplete ? "至少一个要求搜索页、邮编或证据未完成" : null, detailFailure ? `详情维度未完成：${detailFailure}` : null, familyFailure ? `同父体验证未完成：${familyFailure}` : null, ratingFailure ? `评分主体未完成：${ratingFailure}` : null].filter(Boolean);
     if (!match && failures.length) return emptyResult(job, item, "未完成", failures.join("；"));
-    if (!match) return { ...emptyResult(job, item, "暂无", `已完成 ${job.scanDepth} 页扫描，未发现符合口径的自然结果`), priceUsd: detail?.priceUsd ?? null, coupon: detail?.coupon ?? null, monthlySales: detail?.monthlySales ?? null, stock: detail?.stock ?? null, seller: detail?.seller ?? null, rating: rating?.rating ?? null, ratingCount: rating?.ratingCount ?? null, ratingDistribution: rating?.ratingDistribution ?? null };
-    return { ...emptyResult(job, item, "暂无", ""), displayedAsin: match.asin, state: failures.length ? "未完成" as const : "已完成" as const, naturalPage: match.pageNumber, naturalRow: match.naturalRow, naturalColumn: match.visualColumn, naturalOrdinal: match.naturalOrdinal, matchType: matched.matchType, priceUsd: detail?.priceUsd ?? null, coupon: detail?.coupon ?? null, monthlySales: detail?.monthlySales ?? null, stock: detail?.stock ?? null, seller: detail?.seller ?? null, rating: rating?.rating ?? null, ratingCount: rating?.ratingCount ?? null, ratingDistribution: rating?.ratingDistribution ?? null, note: failures.join("；"), observedAt: now() };
+    if (!match) return { ...emptyResult(job, item, "暂无", `已完成 ${job.scanDepth} 页扫描，未发现符合口径的自然结果`), priceAmount: detail?.priceAmount ?? null, coupon: detail?.coupon ?? null, monthlySales: detail?.monthlySales ?? null, stock: detail?.stock ?? null, seller: detail?.seller ?? null, rating: rating?.rating ?? null, ratingCount: rating?.ratingCount ?? null, ratingDistribution: rating?.ratingDistribution ?? null };
+    return { ...emptyResult(job, item, "暂无", ""), displayedAsin: match.asin, state: failures.length ? "未完成" as const : "已完成" as const, naturalPage: match.pageNumber, naturalRow: match.naturalRow, naturalColumn: match.visualColumn, naturalOrdinal: match.naturalOrdinal, matchType: matched.matchType, priceAmount: detail?.priceAmount ?? null, coupon: detail?.coupon ?? null, monthlySales: detail?.monthlySales ?? null, stock: detail?.stock ?? null, seller: detail?.seller ?? null, rating: rating?.rating ?? null, ratingCount: rating?.ratingCount ?? null, ratingDistribution: rating?.ratingDistribution ?? null, note: failures.join("；"), observedAt: now() };
   });
   await context.close();
   const incomplete = results.filter((result) => result.state === "未完成").length; const status = incomplete === 0 ? "已完成" : incomplete === results.length ? "未完成" : "部分完成";

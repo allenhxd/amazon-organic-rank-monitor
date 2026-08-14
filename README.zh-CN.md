@@ -2,7 +2,7 @@
 
 [English](README.md) · [自托管部署](docs/self-hosting.md) · [安全政策](SECURITY.md) · [参与贡献](CONTRIBUTING.md)
 
-这是一套可自托管的 Amazon.com 自然排名、价格、优惠、库存、卖家、评分与评论数量监测工具。界面保持中文，采用 Next.js、PostgreSQL、Redis、BullMQ 和 Playwright Worker。
+这是一套可自托管的 Amazon 自然排名、价格、优惠、库存、卖家、评分与评论数量监测工具。Amazon.com 默认开放；Amazon.ca 与 Amazon.com.mx 已有站点适配，但在完成各自的人工真实回归前保持关闭。界面保持中文，采用 Next.js、PostgreSQL、Redis、BullMQ 和 Playwright Worker。
 
 ![仅含合成数据的本地演示界面](docs/images/project-dashboard.png)
 
@@ -46,6 +46,10 @@ docker compose --env-file .env.production.example config --quiet
 
 - `disabled`：默认值；不冻结、扣除或退回点数，界面隐藏钱包入口，但继续记录实际成功请求数。
 - `wallet`：保留任务创建时冻结、完成时按实际成功请求结算、失败或未执行请求退款的事务与幂等逻辑。
+
+`v0.1.1` 新增新邮箱一次试用、额度批次和按任务冻结批次。升级时会把现有钱包可用余额幂等迁移为管理员额度批次。
+
+站点开放由 `ENABLED_MARKETPLACES` 控制，默认且正式验收范围仅为 `amazon.com`。更改该值后必须重新构建 Web 镜像；加拿大和墨西哥在完成真实邮编、搜索、广告排除、详情及评分回归前不应对普通用户开放。
 
 ## Excel 安全
 
