@@ -20,7 +20,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "bullmq": "^6.0.9",
+    "bullmq": "^6.1.1",
     "ioredis": "^6.0.0",
     "lucide-react": "^1.30.0",
     "next": "^16.3.0",
