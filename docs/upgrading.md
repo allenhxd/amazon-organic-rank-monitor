@@ -9,6 +9,8 @@
 
 For `v0.1.1`, the idempotent migration adds marketplace/currency fields and quota-lot tables, backfills legacy USD prices, and converts each existing positive wallet balance into one administrator quota lot. Confirm that wallet totals and quota-lot available totals match before enabling `METERING_MODE=wallet`.
 
+Going from `v0.1.1` to `v0.2.0` does not introduce a database migration or new required environment variables. Rebuild both images to pick up the updated dependencies. The optional [US Excel CLI](excel-rank.md) runs on a separate local watchlist; it does not read the Web database or modify Web exports.
+
 ```bash
 ./infra/scripts/backup-db.sh
 git fetch --tags

@@ -24,6 +24,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod
+      - name: Audit development and build dependencies too
+        run: pnpm audit
       - run: pnpm licenses:check
 
   secret-scan:
