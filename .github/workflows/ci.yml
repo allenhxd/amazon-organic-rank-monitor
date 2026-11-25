@@ -24,7 +24,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm test
+      - name: Test Web and Excel workflows with local browser fixtures
+        run: pnpm test
+        env:
+          RANK_TEST_BROWSER: "1"
+          RANK_TEST_CHROME: /usr/bin/google-chrome
+      - name: Generate a synthetic Excel report offline
+        run: pnpm excel-rank demo excel-rank-output/demo.xlsx
       - run: pnpm build
       - run: pnpm licenses:check
       - name: Validate Compose configuration

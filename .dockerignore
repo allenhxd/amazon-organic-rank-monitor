@@ -11,6 +11,9 @@ test-results
 *.tsbuildinfo
 outputs
 work
+scripts/rank-v4/
+tools/excel-rank/
+excel-rank-output/
 qa
 server-backups
 output

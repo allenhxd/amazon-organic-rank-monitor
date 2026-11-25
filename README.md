@@ -10,9 +10,13 @@ A self-hosted monitoring tool for Amazon organic search position, price, coupons
 
 Amazon search result pages are dynamic. Ads, delivery location, experiments, layout changes, and live ranking can all change what a browser sees. This project records a reproducible observation under a fixed browser protocol instead of claiming an absolute or universal rank.
 
-Core principles:
+### US Excel CLI
 
-- Sponsored cards are exclusion-only. The data model does not create, store, or export advertising-rank fields.
+The standalone Excel tool records both organic and Sponsored positions and checks whether a product appears in the same or adjacent visual row. Start with an offline workbook using `pnpm excel-rank demo excel-rank-output/demo.xlsx` after installing dependencies. [Excel CLI guide](docs/excel-rank.md)
+
+### Web monitor principles
+
+- The Web monitor excludes Sponsored cards from its organic ranks.
 - `暂无` means every requested page and required evidence step completed successfully but no eligible organic match was observed.
 - `未完成` means the result is unknown because a required page, ZIP check, classification, detail page, rating subject, or family-match proof failed.
 - Same-parent matching is allowed only after the detail page provides verifiable parent/variation evidence.

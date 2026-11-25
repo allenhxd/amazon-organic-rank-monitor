@@ -20,3 +20,7 @@ CLAUDE.md
 # Existing monitoring artifacts are user-owned and intentionally untracked.
 outputs/
 work/
+
+# Machine-specific monitoring workflow and local customer reports
+/scripts/rank-v4/
+/excel-rank-output/

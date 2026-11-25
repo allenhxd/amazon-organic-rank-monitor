@@ -4,6 +4,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-25
+
+- Added a standalone US Excel CLI for organic and Sponsored product-grid observations, physical row proximity, price and review evidence.
+- Added a synthetic demo, an editable watchlist template, read-only Sponsored Products keyword import, saved browser evidence and offline replay.
+- Existing watchlists supply their own ASINs, SKUs and keywords. The CLI writes a new output file for each command.
+- Updated the frozen production dependency graph and its third-party license inventory. The Web application's organic-only export contract continues to apply.
+
 ## [0.1.1] - 2026-08-14
 
 ### Added
